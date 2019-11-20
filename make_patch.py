@@ -1,5 +1,3 @@
-#-*- coding: utf-8 -*-
-
 import argparse
 import os
 import random
@@ -96,12 +94,13 @@ netClassifier = resnet_face18(False)
 # netClassifier = DataParallel(netClassifier)
 
 model_dict = netClassifier.state_dict()
-pretrained_dict = torch.load('C:/Users/NMAIL/Documents/강의/고급정보보호/Term project/code/arcface-pytorch-master/checkpoints/resnet18_110.pth', map_location = device)
+pretrained_dict = torch.load('./checkpoints/resnet18_110.pth', map_location = device)
 pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
 model_dict.update(pretrained_dict)
 netClassifier.load_state_dict(model_dict)
 netClassifier.to(device)
-
+# print(device)
+# exit(0)
 ### Upto here ###
 
 
@@ -173,7 +172,18 @@ mean, std = np.array([0.5, 0.5, 0.5]), np.array([0.5, 0.5, 0.5])
 min_out, max_out = np.min((min_in-mean)/std), np.max((max_in-mean)/std)
 
 def cosin_metric(x1, x2):
-    return np.dot(x1, x2) / (np.linalg.norm(x1) * np.linalg.norm(x2))
+    d1 = x1.detach().numpy()
+    d2 = x2.detach().numpy()
+
+    print("x1: ")
+    print(x1)
+    print("x2: ")
+    print(x2)
+
+    d1 = np.reshape(d1, 1024)
+    d2 = np.reshape(d2, 1024)
+
+    return np.dot(d1, d2) / (np.linalg.norm(d1) * np.linalg.norm(d2))
 
 def train(epoch, patch, patch_shape):
     netClassifier.eval()
@@ -186,17 +196,17 @@ def train(epoch, patch, patch_shape):
         ### added for arcface data input
         data = data.numpy()
 
-        r = data[:, 0, :, :].reshape((128, 128))
-        g = data[:, 1, :, :].reshape((128, 128))
-        b = data[:, 2, :, :].reshape((128, 128))
+        # r = data[:, 0, :, :].reshape((128, 128))
+        # g = data[:, 1, :, :].reshape((128, 128))
+        # b = data[:, 2, :, :].reshape((128, 128))
 
-        data = r*0.2989 + g*0.5870 + b*0.1140
-        data = np.dstack((data, np.fliplr(data)))
-        data = data.transpose((2, 0, 1))
-        data = data[:, np.newaxis, :, :]
-        data = data.astype(np.float32, copy=False)
-        data -= 127.5
-        data /= 127.5
+        # data = r*0.2989 + g*0.5870 + b*0.1140
+        # data = np.dstack((data, np.fliplr(data)))
+        # data = data.transpose((2, 0, 1))
+        # data = data[:, np.newaxis, :, :]
+        # data = data.astype(np.float32, copy=False)
+        # data -= 127.5
+        # data /= 127.5
 
         data = torch.from_numpy(data)
         ###
@@ -206,17 +216,17 @@ def train(epoch, patch, patch_shape):
             labels = labels.cuda()
         data, labels = Variable(data), Variable(labels)
 
-        prediction = netClassifier(data)
+        # prediction = netClassifier(data)
         # print("{} .... {}".format(prediction.data.max(1)[1][0], labels.data[0]))
  
-        print("prediction")
-        print(prediction)
-        print(prediction.data.max(1))
-        print(prediction.data.max(1)[1][0])
-        print(prediction.shape)
-        print(labels)
+        # print("prediction")
+        # print(prediction)
+        # print(prediction.data.max(1))
+        # print(prediction.data.max(1)[1][0])
+        # print(prediction.shape)
+        # print(labels)
 
-        # assert False
+        
 
         # only computer adversarial examples on examples that are originally classified correctly        
         # if prediction.data.max(1)[1][0] != labels.data[0]:
@@ -317,18 +327,56 @@ def test(epoch, patch, patch_shape):
 def attack(x, patch, mask):
     netClassifier.eval()
 
+    r = x[:, 0, :, :].reshape((128, 128))
+    g = x[:, 1, :, :].reshape((128, 128))
+    b = x[:, 2, :, :].reshape((128, 128))
+
+    x = r*0.2989 + g*0.5870 + b*0.1140
+    x = x.cpu()
+    x = np.dstack((x, np.fliplr(x)))
+    x = x.transpose((2, 0, 1))
+    x = x[:, np.newaxis, :, :]
+    x = x.astype(np.float32, copy=False)
+    x -= 127.5
+    x /= 127.5
+
     # x_out = F.softmax(netClassifier(x))
+    x = torch.from_numpy(x).to(device)
+    # x = Variable(x).to(device)
     cur_vec = netClassifier(x)
     new_vec = cur_vec
     # target_prob = x_out.data[0][target]
 
+    print("x")
+    print(x.shape)
+
     adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
-    
-    count = 0 
+    print("adv_x")
+    print(adv_x.shape)
+
+    count = 0
+
+    cur_vec = cur_vec.cpu()
+    new_vec = new_vec.cpu()
    
     # while conf_target > target_prob:
     while cosin_metric(cur_vec, new_vec) > 0.2:
         count += 1
+
+        print("image size: ")
+        print(adv_x.shape)
+        r = adv_x[:, 0, :, :].reshape((128, 128))
+        g = adv_x[:, 1, :, :].reshape((128, 128))
+        b = adv_x[:, 2, :, :].reshape((128, 128))
+
+        adv_x = r*0.2989 + g*0.5870 + b*0.1140
+        adv_x = np.dstack((adv_x, np.fliplr(adv_x)))
+        adv_x = adv_x.transpose((2, 0, 1))
+        adv_x = adv_x[:, np.newaxis, :, :]
+        adv_x = adv_x.astype(np.float32, copy=False)
+        adv_x -= 127.5
+        adv_x /= 127.5
+
         adv_x = Variable(adv_x.data, requires_grad=True)
         # adv_out = F.log_softmax(netClassifier(adv_x))
         new_vec = netClassifier(adv_x)
