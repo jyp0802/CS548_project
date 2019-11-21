@@ -22,6 +22,8 @@ from utils import *
 from models import *
 from torch.nn import DataParallel
 
+from PIL import Image
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 parser = argparse.ArgumentParser()
@@ -131,6 +133,7 @@ train_loader = torch.utils.data.DataLoader(
         transforms.CenterCrop(max([3, 128, 128])),
         transforms.ToTensor(),
         ToSpaceBGR('RGB'=='BGR'),
+        # ToSpaceBGR('RGB'=='RGB'),
         ToRange255(max([0, 1])==255),
         normalize,
     ])),
@@ -154,7 +157,8 @@ test_loader = torch.utils.data.DataLoader(
         transforms.Scale(round(max([3, 128, 128])*1.050)),
         transforms.CenterCrop(max([3, 128, 128])),
         transforms.ToTensor(),
-        ToSpaceBGR('RGB'=='BGR'),
+        # ToSpaceBGR('RGB'=='BGR'),
+        ToSpaceBGR('RGB'=='RGB'),
         ToRange255(max([0,1])==255),
         normalize,
     ])),
@@ -171,19 +175,76 @@ min_in, max_in = np.array([min_in, min_in, min_in]), np.array([max_in, max_in, m
 mean, std = np.array([0.5, 0.5, 0.5]), np.array([0.5, 0.5, 0.5]) 
 min_out, max_out = np.min((min_in-mean)/std), np.max((max_in-mean)/std)
 
-def cosin_metric(x1, x2):
-    d1 = x1.detach().numpy()
-    d2 = x2.detach().numpy()
+### input: x(torch), output: x_d(torch)
+def arcface_transform(x):
 
-    print("x1: ")
-    print(x1)
-    print("x2: ")
-    print(x2)
+    # r = x[:, 0, :, :].reshape((128, 128))
+    # g = x[:, 1, :, :].reshape((128, 128))
+    # b = x[:, 2, :, :].reshape((128, 128))
+
+    # x_d = r*0.2989 + g*0.5870 + b*0.1140
+    # x_d = x_d.cpu()
+    # x_d = np.dstack((x_d, np.fliplr(x_d)))
+    # print(x_d.shape)
+    # x_d = x_d.transpose((2, 0, 1))
+    # print(x_d.shape)
+    # x_d = x_d[:, np.newaxis, :, :]
+    # x_d = x_d.astype(np.float32, copy=False)
+    # x_d -= 127.5
+    # x_d /= 127.5
+
+    # torch.set_grad_enabled(True)
+    r = x[:, 0, :, :].reshape((128, 128)).clone().detach().requires_grad_(True)
+    g = x[:, 1, :, :].reshape((128, 128)).clone().detach().requires_grad_(True)
+    b = x[:, 2, :, :].reshape((128, 128)).clone().detach().requires_grad_(True)
+
+    x_d = (r*0.2989 + g*0.5870 + b*0.1140).clone().detach().requires_grad_(True)
+    # x_stack = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
+    # x_permute = x_stack.permute(2, 0, 1)
+    # x_newdim = x_permute.unsqueeze(1)
+    # x_newdim -= 127.5
+    # x_newdim /=127.5
+
+    x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
+    x_d = x_d.permute(2, 0, 1)
+    x_d = x_d.unsqueeze(1)
+    x_d -= 127.5
+    x_d /=127.5
+
+    print(x_d.requires_grad)
+
+    exit()
+
+    return x_d
+
+def to_print(x):
+
+    output = []
+    r = x[0][0]
+    g = x[0][1]
+    b = x[0][2]
+
+    for i in range(128):
+        temp_x = []
+        for j in range(128):
+            temp_x.append([r[i][j], g[i][j], b[i][j]])
+        output.append(temp_x)
+
+    return np.array(output)
+
+def cosin_metric(x1, x2):
+    d1 = x1.clone().detach().numpy()
+    d2 = x2.clone().detach().numpy()
+
+    print(d1.shape)
+    print(d2.shape)
 
     d1 = np.reshape(d1, 1024)
     d2 = np.reshape(d2, 1024)
 
-    return np.dot(d1, d2) / (np.linalg.norm(d1) * np.linalg.norm(d2))
+    return np.array([np.dot(d1, d2) / (np.linalg.norm(d1) * np.linalg.norm(d2))])
+
+
 
 def train(epoch, patch, patch_shape):
     netClassifier.eval()
@@ -193,40 +254,16 @@ def train(epoch, patch, patch_shape):
     for batch_idx, (data, labels) in enumerate(train_loader):
         
         print(batch_idx)
-        ### added for arcface data input
-        data = data.numpy()
-
-        # r = data[:, 0, :, :].reshape((128, 128))
-        # g = data[:, 1, :, :].reshape((128, 128))
-        # b = data[:, 2, :, :].reshape((128, 128))
-
-        # data = r*0.2989 + g*0.5870 + b*0.1140
-        # data = np.dstack((data, np.fliplr(data)))
-        # data = data.transpose((2, 0, 1))
-        # data = data[:, np.newaxis, :, :]
-        # data = data.astype(np.float32, copy=False)
-        # data -= 127.5
-        # data /= 127.5
-
-        data = torch.from_numpy(data)
-        ###
 
         if opt.cuda:
             data = data.cuda()
             labels = labels.cuda()
         data, labels = Variable(data), Variable(labels)
 
+        vutils.save_image(data.data, '0.png', normalize = True)
+
         # prediction = netClassifier(data)
         # print("{} .... {}".format(prediction.data.max(1)[1][0], labels.data[0]))
- 
-        # print("prediction")
-        # print(prediction)
-        # print(prediction.data.max(1))
-        # print(prediction.data.max(1)[1][0])
-        # print(prediction.shape)
-        # print(labels)
-
-        
 
         # only computer adversarial examples on examples that are originally classified correctly        
         # if prediction.data.max(1)[1][0] != labels.data[0]:
@@ -324,35 +361,25 @@ def test(epoch, patch, patch_shape):
         # log to file  
         progress_bar(batch_idx, len(test_loader), "Test Success: {:.3f}".format(success/total))
 
+### x = 
 def attack(x, patch, mask):
+
     netClassifier.eval()
 
-    r = x[:, 0, :, :].reshape((128, 128))
-    g = x[:, 1, :, :].reshape((128, 128))
-    b = x[:, 2, :, :].reshape((128, 128))
+    vutils.save_image(x.data, '1.png', normalize = True)
 
-    x = r*0.2989 + g*0.5870 + b*0.1140
-    x = x.cpu()
-    x = np.dstack((x, np.fliplr(x)))
-    x = x.transpose((2, 0, 1))
-    x = x[:, np.newaxis, :, :]
-    x = x.astype(np.float32, copy=False)
-    x -= 127.5
-    x /= 127.5
-
+    x_d = arcface_transform(x)
     # x_out = F.softmax(netClassifier(x))
-    x = torch.from_numpy(x).to(device)
+    # x_d = torch.from_numpy(x_d).to(device)
     # x = Variable(x).to(device)
-    cur_vec = netClassifier(x)
+    cur_vec = netClassifier(x_d)
     new_vec = cur_vec
     # target_prob = x_out.data[0][target]
 
-    print("x")
-    print(x.shape)
-
     adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
-    print("adv_x")
-    print(adv_x.shape)
+    adv_x = torch.tensor(adv_x.data, requires_grad=True)
+
+    vutils.save_image(adv_x.data, '2.png', normalize = True)
 
     count = 0
 
@@ -363,40 +390,35 @@ def attack(x, patch, mask):
     while cosin_metric(cur_vec, new_vec) > 0.2:
         count += 1
 
-        print("image size: ")
-        print(adv_x.shape)
-        r = adv_x[:, 0, :, :].reshape((128, 128))
-        g = adv_x[:, 1, :, :].reshape((128, 128))
-        b = adv_x[:, 2, :, :].reshape((128, 128))
-
-        adv_x = r*0.2989 + g*0.5870 + b*0.1140
-        adv_x = np.dstack((adv_x, np.fliplr(adv_x)))
-        adv_x = adv_x.transpose((2, 0, 1))
-        adv_x = adv_x[:, np.newaxis, :, :]
-        adv_x = adv_x.astype(np.float32, copy=False)
-        adv_x -= 127.5
-        adv_x /= 127.5
-
-        adv_x = Variable(adv_x.data, requires_grad=True)
+        adv_xd = arcface_transform(adv_x)
+        adv_xd = torch.tensor(adv_xd.data, requires_grad = True)
+        # adv_xd = torch.from_numpy(adv_xd).to(device)
+        # adv_xd = Variable(adv_xd.data, requires_grad=True).to(device)
         # adv_out = F.log_softmax(netClassifier(adv_x))
-        new_vec = netClassifier(adv_x)
+        new_vec = netClassifier(adv_xd).cpu()
        
         # adv_out_probs, adv_out_labels = adv_out.max(1)
         
         # Loss = -adv_out[0][target]
-        Loss = -1 * cosin_metric(cur_vec, new_vec)
+        # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
+        # Loss = nn.CosineEmbeddingLoss(new_vec.view(1024), cur_vec.view(1024), torch.tensor([1 for i in range(1024)]))
+        Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
         Loss.backward()
      
-        adv_grad = adv_x.grad.clone()
+        adv_x_grad = adv_x.grad.clone()
         
         adv_x.grad.data.zero_()
+
+        print(adv_x_grad.shape)
        
-        patch -= adv_grad 
+        patch -= adv_x_grad 
         
         adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
         adv_x = torch.clamp(adv_x, min_out, max_out)
  
-        new_vec = netClassifier(adv_x)
+        exit(0)
+
+        # new_vec = netClassifier(adv_x)
         # out = F.softmax(netClassifier(adv_x))
         # target_prob = out.data[0][target]
         #y_argmax_prob = out.data.max(1)[0][0]
