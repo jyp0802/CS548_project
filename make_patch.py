@@ -178,27 +178,11 @@ min_out, max_out = np.min((min_in-mean)/std), np.max((max_in-mean)/std)
 ### input: x(torch), output: x_d(torch)
 def arcface_transform(x):
 
-    # r = x[:, 0, :, :].reshape((128, 128))
-    # g = x[:, 1, :, :].reshape((128, 128))
-    # b = x[:, 2, :, :].reshape((128, 128))
+    r = x[:, 0, :, :].reshape((128, 128))
+    g = x[:, 1, :, :].reshape((128, 128)).requires_grad_(True)
+    b = x[:, 2, :, :].reshape((128, 128)).requires_grad_(True)
 
-    # x_d = r*0.2989 + g*0.5870 + b*0.1140
-    # x_d = x_d.cpu()
-    # x_d = np.dstack((x_d, np.fliplr(x_d)))
-    # print(x_d.shape)
-    # x_d = x_d.transpose((2, 0, 1))
-    # print(x_d.shape)
-    # x_d = x_d[:, np.newaxis, :, :]
-    # x_d = x_d.astype(np.float32, copy=False)
-    # x_d -= 127.5
-    # x_d /= 127.5
-
-    # torch.set_grad_enabled(True)
-    r = x[:, 0, :, :].reshape((128, 128)).clone().detach().requires_grad_(True)
-    g = x[:, 1, :, :].reshape((128, 128)).clone().detach().requires_grad_(True)
-    b = x[:, 2, :, :].reshape((128, 128)).clone().detach().requires_grad_(True)
-
-    x_d = (r*0.2989 + g*0.5870 + b*0.1140).clone().detach().requires_grad_(True)
+    x_d = (r*0.2989 + g*0.5870 + b*0.1140)
     # x_stack = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
     # x_permute = x_stack.permute(2, 0, 1)
     # x_newdim = x_permute.unsqueeze(1)
@@ -210,10 +194,6 @@ def arcface_transform(x):
     x_d = x_d.unsqueeze(1)
     x_d -= 127.5
     x_d /=127.5
-
-    print(x_d.requires_grad)
-
-    exit()
 
     return x_d
 
@@ -235,9 +215,6 @@ def to_print(x):
 def cosin_metric(x1, x2):
     d1 = x1.clone().detach().numpy()
     d2 = x2.clone().detach().numpy()
-
-    print(d1.shape)
-    print(d2.shape)
 
     d1 = np.reshape(d1, 1024)
     d2 = np.reshape(d2, 1024)
@@ -369,15 +346,11 @@ def attack(x, patch, mask):
     vutils.save_image(x.data, '1.png', normalize = True)
 
     x_d = arcface_transform(x)
-    # x_out = F.softmax(netClassifier(x))
-    # x_d = torch.from_numpy(x_d).to(device)
-    # x = Variable(x).to(device)
+
     cur_vec = netClassifier(x_d)
     new_vec = cur_vec
-    # target_prob = x_out.data[0][target]
 
     adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
-    adv_x = torch.tensor(adv_x.data, requires_grad=True)
 
     vutils.save_image(adv_x.data, '2.png', normalize = True)
 
@@ -385,38 +358,61 @@ def attack(x, patch, mask):
 
     cur_vec = cur_vec.cpu()
     new_vec = new_vec.cpu()
-   
-    # while conf_target > target_prob:
-    while cosin_metric(cur_vec, new_vec) > 0.2:
-        count += 1
 
-        adv_xd = arcface_transform(adv_x)
-        adv_xd = torch.tensor(adv_xd.data, requires_grad = True)
-        # adv_xd = torch.from_numpy(adv_xd).to(device)
-        # adv_xd = Variable(adv_xd.data, requires_grad=True).to(device)
-        # adv_out = F.log_softmax(netClassifier(adv_x))
-        new_vec = netClassifier(adv_xd).cpu()
-       
+    cosin_sim = 1
+
+    # while conf_target > target_prob:
+    while cosin_sim > 0.2:
+        count += 1
+        print(count)
+
+        adv_x = Variable(adv_x.data, requires_grad=True)
+
+        r = adv_x[:, 0, :, :].reshape((128, 128))
+        g = adv_x[:, 1, :, :].reshape((128, 128))
+        b = adv_x[:, 2, :, :].reshape((128, 128))
+
+        x_d = (r*0.2989 + g*0.5870 + b*0.1140)
+        x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
+        x_d = x_d.permute(2, 0, 1)
+        x_d = x_d.unsqueeze(1)
+        x_d -= 127.5
+        x_d /=127.5
+
+        # adv_xd = torch.tensor(adv_xd.data, requires_grad = True)
+        new_vec = netClassifier(x_d).cpu()
+
         # adv_out_probs, adv_out_labels = adv_out.max(1)
         
         # Loss = -adv_out[0][target]
         # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
         # Loss = nn.CosineEmbeddingLoss(new_vec.view(1024), cur_vec.view(1024), torch.tensor([1 for i in range(1024)]))
-        Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
+        # Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
+        Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))
+        print(Loss)
         Loss.backward()
-     
+
         adv_x_grad = adv_x.grad.clone()
         
         adv_x.grad.data.zero_()
 
-        print(adv_x_grad.shape)
-       
-        patch -= adv_x_grad 
+        prev_patch = patch
+        patch -= adv_x_grad
+
+        # print(prev_patch==patch)
+
         
         adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
         adv_x = torch.clamp(adv_x, min_out, max_out)
- 
-        exit(0)
+
+        r = r.detach()
+        g = g.detach()
+        b = b.detach()
+        x_d = x_d.detach()
+        new_vec = new_vec.detach()
+        cur_vec = cur_vec.detach()
+
+        cosin_sim = cosin_metric(cur_vec, new_vec)
 
         # new_vec = netClassifier(adv_x)
         # out = F.softmax(netClassifier(adv_x))
@@ -426,6 +422,7 @@ def attack(x, patch, mask):
         #print(count, conf_target, target_prob, y_argmax_prob)  
 
         if count >= opt.max_count:
+            vutils.save_image(adv_x.data, 'final.png', normalize = True)
             break
 
 
