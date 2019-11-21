@@ -11,8 +11,13 @@ from torch.autograd import Variable
 
 from scipy.ndimage.interpolation import rotate
 
-_, term_width = os.popen('stty size', 'r').read().split()
-term_width = int(term_width)
+import platform
+
+if platform.system() == "Windows":
+    term_width = 240
+else:
+    _, term_width = os.popen('stty size', 'r').read().split()
+    term_width = int(term_width)
 
 TOTAL_BAR_LENGTH = 35.
 last_time = time.time()
