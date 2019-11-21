@@ -34,11 +34,11 @@ parser.add_argument('--cuda', action='store_true', help='enables cuda')
 parser.add_argument('--target', type=int, default=859, help='The target class: 859 == toaster')
 parser.add_argument('--conf_target', type=float, default=0.9, help='Stop attack on image when target classifier reaches this value for target class')
 
-parser.add_argument('--max_count', type=int, default=1000, help='max number of iterations to find adversarial example')
+parser.add_argument('--max_count', type=int, default=100, help='max number of iterations to find adversarial example')
 parser.add_argument('--patch_type', type=str, default='circle', help='patch type: circle or square')
 parser.add_argument('--patch_size', type=float, default=0.05, help='patch size. E.g. 0.05 ~= 5% of image ')
 
-parser.add_argument('--train_size', type=int, default=2000, help='Number of training images')
+parser.add_argument('--train_size', type=int, default=10, help='Number of training images')
 parser.add_argument('--test_size', type=int, default=2000, help='Number of test images')
 
 parser.add_argument('--image_size', type=int, default=299, help='the height / width of the input image to network')
@@ -183,12 +183,6 @@ def arcface_transform(x):
     b = x[:, 2, :, :].reshape((128, 128)).requires_grad_(True)
 
     x_d = (r*0.2989 + g*0.5870 + b*0.1140)
-    # x_stack = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
-    # x_permute = x_stack.permute(2, 0, 1)
-    # x_newdim = x_permute.unsqueeze(1)
-    # x_newdim -= 127.5
-    # x_newdim /=127.5
-
     x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
     x_d = x_d.permute(2, 0, 1)
     x_d = x_d.unsqueeze(1)
@@ -237,14 +231,7 @@ def train(epoch, patch, patch_shape):
             labels = labels.cuda()
         data, labels = Variable(data), Variable(labels)
 
-        vutils.save_image(data.data, '0.png', normalize = True)
-
-        # prediction = netClassifier(data)
-        # print("{} .... {}".format(prediction.data.max(1)[1][0], labels.data[0]))
-
-        # only computer adversarial examples on examples that are originally classified correctly        
-        # if prediction.data.max(1)[1][0] != labels.data[0]:
-        #     continue
+        # vutils.save_image(data.data, '0.png', normalize = True)
 
         total += 1
         
@@ -261,18 +248,18 @@ def train(epoch, patch, patch_shape):
  
         adv_x, mask, patch = attack(data, patch, mask)
         
-        adv_label = netClassifier(adv_x).data.max(1)[1][0]
-        ori_label = labels.data[0]
+        # adv_label = netClassifier(adv_x).data.max(1)[1][0]
+        # ori_label = labels.data[0]
         
-        if adv_label == target:
-            success += 1
+        # if adv_label == target:
+        #     success += 1
       
-            if plot_all == 1: 
-                # plot source image
-                vutils.save_image(data.data, "./%s/%d_%d_original.png" %(opt.outf, batch_idx, ori_label), normalize=True)
-                
-                # plot adversarial image
-                vutils.save_image(adv_x.data, "./%s/%d_%d_adversarial.png" %(opt.outf, batch_idx, adv_label), normalize=True)
+        if plot_all == 1: 
+            # plot source image
+            vutils.save_image(data.data, "./%s/%d_original.png" %(opt.outf, batch_idx), normalize=True)
+            
+            # plot adversarial image
+            vutils.save_image(adv_x.data, "./%s/%d_adversarial.png" %(opt.outf, batch_idx), normalize=True)
  
         masked_patch = torch.mul(mask, patch)
         patch = masked_patch.data.cpu().numpy()
@@ -301,8 +288,8 @@ def test(epoch, patch, patch_shape):
         prediction = netClassifier(data)
 
         # only computer adversarial examples on examples that are originally classified correctly        
-        if prediction.data.max(1)[1][0] != labels.data[0]:
-            continue
+        # if prediction.data.max(1)[1][0] != labels.data[0]:
+        #     continue
       
         total += 1 
         
@@ -320,8 +307,8 @@ def test(epoch, patch, patch_shape):
         adv_x = torch.mul((1-mask),data) + torch.mul(mask,patch)
         adv_x = torch.clamp(adv_x, min_out, max_out)
         
-        adv_label = netClassifier(adv_x).data.max(1)[1][0]
-        ori_label = labels.data[0]
+        adv_label = netClassifier(adv_x)
+        ori_label = netClassifier(x)
         
         if adv_label == target:
             success += 1
@@ -343,7 +330,7 @@ def attack(x, patch, mask):
 
     netClassifier.eval()
 
-    vutils.save_image(x.data, '1.png', normalize = True)
+    # vutils.save_image(x.data, '1.png', normalize = True)
 
     x_d = arcface_transform(x)
 
@@ -352,7 +339,7 @@ def attack(x, patch, mask):
 
     adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
 
-    vutils.save_image(adv_x.data, '2.png', normalize = True)
+    # vutils.save_image(adv_x.data, '2.png', normalize = True)
 
     count = 0
 
@@ -361,10 +348,8 @@ def attack(x, patch, mask):
 
     cosin_sim = 1
 
-    # while conf_target > target_prob:
     while cosin_sim > 0.2:
         count += 1
-        print(count)
 
         adv_x = Variable(adv_x.data, requires_grad=True)
 
@@ -379,29 +364,24 @@ def attack(x, patch, mask):
         x_d -= 127.5
         x_d /=127.5
 
-        # adv_xd = torch.tensor(adv_xd.data, requires_grad = True)
         new_vec = netClassifier(x_d).cpu()
-
-        # adv_out_probs, adv_out_labels = adv_out.max(1)
         
         # Loss = -adv_out[0][target]
         # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
-        # Loss = nn.CosineEmbeddingLoss(new_vec.view(1024), cur_vec.view(1024), torch.tensor([1 for i in range(1024)]))
         # Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
-        Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))
-        print(Loss)
+        # Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))
+        Loss = F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) * 10000
         Loss.backward()
 
         adv_x_grad = adv_x.grad.clone()
         
         adv_x.grad.data.zero_()
 
-        prev_patch = patch
+        if count % 100 == 0:
+            print(adv_x_grad)
+
         patch -= adv_x_grad
 
-        # print(prev_patch==patch)
-
-        
         adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
         adv_x = torch.clamp(adv_x, min_out, max_out)
 
@@ -414,15 +394,8 @@ def attack(x, patch, mask):
 
         cosin_sim = cosin_metric(cur_vec, new_vec)
 
-        # new_vec = netClassifier(adv_x)
-        # out = F.softmax(netClassifier(adv_x))
-        # target_prob = out.data[0][target]
-        #y_argmax_prob = out.data.max(1)[0][0]
-        
-        #print(count, conf_target, target_prob, y_argmax_prob)  
-
         if count >= opt.max_count:
-            vutils.save_image(adv_x.data, 'final.png', normalize = True)
+            vutils.save_image(adv_x.data, '3.png', normalize = True)
             break
 
 
@@ -439,4 +412,4 @@ if __name__ == '__main__':
     
     for epoch in range(1, opt.epochs + 1):
         patch = train(epoch, patch, patch_shape)
-        test(epoch, patch, patch_shape)
+        # test(epoch, patch, patch_shape)
