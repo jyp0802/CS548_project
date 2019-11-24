@@ -23,6 +23,7 @@ from models import *
 from torch.nn import DataParallel
 
 from PIL import Image
+import cv2
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -84,31 +85,24 @@ plot_all = opt.plot_all
 
 assert train_size + test_size <= 13233, "Traing set size + Test set size > Total dataset size"
 
-# print("=> creating model ")
-# netClassifier = pretrainedmodels.__dict__[opt.netClassifier](num_classes=1000, pretrained='imagenet')
-# if opt.cuda:
-#     netClassifier.cuda()
 
+### Arcface model load ###
 
-### Newly added ###
+def load_model(model, model_path):
+    model_dict = model.state_dict()
+    pretrained_dict = torch.load(model_path, map_location = device)
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    model_dict.update(pretrained_dict)
+    model.load_state_dict(model_dict)
 
 netClassifier = resnet_face18(False)
-# netClassifier = DataParallel(netClassifier)
-
-model_dict = netClassifier.state_dict()
-pretrained_dict = torch.load('./checkpoints/resnet18_110.pth', map_location = device)
-pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-model_dict.update(pretrained_dict)
-netClassifier.load_state_dict(model_dict)
+netClassifier = DataParallel(netClassifier)
+load_model(netClassifier, './checkpoints/resnet18_110.pth')
+netClassifier.load_state_dict(torch.load('./checkpoints/resnet18_110.pth', map_location = device))
 netClassifier.to(device)
-# print(device)
-# exit(0)
-### Upto here ###
 
 
 print('==> Preparing data..')
-# normalize = transforms.Normalize(mean=netClassifier.mean,
-#                                  std=netClassifier.std)
 normalize = transforms.Normalize(mean = [0.5, 0.5, 0.5], std = [0.5, 0.5, 0.5])
 idx = np.arange(13233)
 np.random.shuffle(idx)
@@ -129,13 +123,14 @@ test_idx = idx[train_size:test_size]
 
 train_loader = torch.utils.data.DataLoader(
     dset.ImageFolder('./imagenetdata/val', transforms.Compose([
-        transforms.Scale(round(max([3, 128, 128])*1.050)),
-        transforms.CenterCrop(max([3, 128, 128])),
+        # transforms.Scale(round(max([3, 128, 128])*1.050)),
+        transforms.Scale(round(max([3, 128, 128]))),
+        # transforms.CenterCrop(max([3, 128, 128])),
         transforms.ToTensor(),
         ToSpaceBGR('RGB'=='BGR'),
         # ToSpaceBGR('RGB'=='RGB'),
         ToRange255(max([0, 1])==255),
-        normalize,
+        # normalize,
     ])),
     batch_size=1, shuffle=False, sampler=SubsetRandomSampler(training_idx),
     num_workers=opt.workers, pin_memory=True)
@@ -165,17 +160,14 @@ test_loader = torch.utils.data.DataLoader(
     batch_size=1, shuffle=False, sampler=SubsetRandomSampler(test_idx),
     num_workers=opt.workers, pin_memory=True)
 
-# min_in, max_in = netClassifier.input_range[0], netClassifier.input_range[1]
-# min_in, max_in = np.array([min_in, min_in, min_in]), np.array([max_in, max_in, max_in])
-# mean, std = np.array(netClassifier.mean), np.array(netClassifier.std) 
-# min_out, max_out = np.min((min_in-mean)/std), np.max((max_in-mean)/std)
-
 min_in, max_in = 0, 1
 min_in, max_in = np.array([min_in, min_in, min_in]), np.array([max_in, max_in, max_in])
 mean, std = np.array([0.5, 0.5, 0.5]), np.array([0.5, 0.5, 0.5]) 
 min_out, max_out = np.min((min_in-mean)/std), np.max((max_in-mean)/std)
 
-### input: x(torch), output: x_d(torch)
+
+### Transforming image for arcface
+
 def arcface_transform(x):
 
     r = x[:, 0, :, :].reshape((128, 128))
@@ -191,20 +183,7 @@ def arcface_transform(x):
 
     return x_d
 
-def to_print(x):
-
-    output = []
-    r = x[0][0]
-    g = x[0][1]
-    b = x[0][2]
-
-    for i in range(128):
-        temp_x = []
-        for j in range(128):
-            temp_x.append([r[i][j], g[i][j], b[i][j]])
-        output.append(temp_x)
-
-    return np.array(output)
+### Cosine similarity metric
 
 def cosin_metric(x1, x2):
     d1 = x1.clone().detach().numpy()
@@ -223,15 +202,11 @@ def train(epoch, patch, patch_shape):
     total = 0
     recover_time = 0
     for batch_idx, (data, labels) in enumerate(train_loader):
-        
-        print(batch_idx)
 
         if opt.cuda:
             data = data.cuda()
             labels = labels.cuda()
         data, labels = Variable(data), Variable(labels)
-
-        # vutils.save_image(data.data, '0.png', normalize = True)
 
         total += 1
         
@@ -247,12 +222,7 @@ def train(epoch, patch, patch_shape):
         patch, mask = Variable(patch), Variable(mask)
  
         adv_x, mask, patch = attack(data, patch, mask)
-        
-        # adv_label = netClassifier(adv_x).data.max(1)[1][0]
-        # ori_label = labels.data[0]
-        
-        # if adv_label == target:
-        #     success += 1
+
       
         if plot_all == 1: 
             # plot source image
@@ -280,6 +250,7 @@ def test(epoch, patch, patch_shape):
     success = 0
     total = 0
     for batch_idx, (data, labels) in enumerate(test_loader):
+
         if opt.cuda:
             data = data.cuda()
             labels = labels.cuda()
@@ -325,21 +296,17 @@ def test(epoch, patch, patch_shape):
         # log to file  
         progress_bar(batch_idx, len(test_loader), "Test Success: {:.3f}".format(success/total))
 
-### x = 
+
 def attack(x, patch, mask):
 
     netClassifier.eval()
 
-    # vutils.save_image(x.data, '1.png', normalize = True)
+    x_d = arcface_transform(x) ### image transformed for arcface
 
-    x_d = arcface_transform(x)
-
-    cur_vec = netClassifier(x_d)
+    cur_vec = netClassifier(x_d) 
     new_vec = cur_vec
 
-    adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
-
-    # vutils.save_image(adv_x.data, '2.png', normalize = True)
+    adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch) ### putting patch to image
 
     count = 0
 
@@ -353,6 +320,7 @@ def attack(x, patch, mask):
 
         adv_x = Variable(adv_x.data, requires_grad=True)
 
+        ### Transforming image for arcface (RGB -> grayscale)
         r = adv_x[:, 0, :, :].reshape((128, 128))
         g = adv_x[:, 1, :, :].reshape((128, 128))
         b = adv_x[:, 2, :, :].reshape((128, 128))
@@ -366,11 +334,14 @@ def attack(x, patch, mask):
 
         new_vec = netClassifier(x_d).cpu()
         
+        ### Loss function.
+        ### 1) Naturalness loss should be added
+        ### 2) Gradient vanishing problem should be addressed
         # Loss = -adv_out[0][target]
         # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
         # Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
         # Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))
-        Loss = F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) * 10000
+        Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024))
         Loss.backward()
 
         adv_x_grad = adv_x.grad.clone()
@@ -394,8 +365,11 @@ def attack(x, patch, mask):
 
         cosin_sim = cosin_metric(cur_vec, new_vec)
 
+        if count % 100 == 0:
+            print("Cosine similarity: ")
+            print(cosin_sim)
+
         if count >= opt.max_count:
-            vutils.save_image(adv_x.data, '3.png', normalize = True)
             break
 
 
