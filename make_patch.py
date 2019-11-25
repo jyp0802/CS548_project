@@ -317,7 +317,7 @@ def train(epoch):
         patch, mask = torch.FloatTensor(patch), torch.FloatTensor(mask)
         if opt.cuda:
             patch, mask = patch.cuda(), mask.cuda()
-        patch, mask = Variable(patch), Variable(mask)
+        patch, mask = Variable(patch, requires_grad = True), Variable(mask, requires_grad = True)
 
         mask_rgb = torch.mul(mask, data)
  
@@ -405,13 +405,18 @@ def attack(x, patch, mask, orig_rgb):
     # print(orig_rgb[0][1][0])
     # print(orig_rgb[0][2][0])
 
+    # print(patch.requires_grad)
+    # exit()
+
     x_d = arcface_transform(x) ### image transformed for arcface
 
     cur_vec = netClassifier(x_d) 
     new_vec = cur_vec
 
-    adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch) ### putting patch to image
-
+    adv_x = Variable(torch.mul((1-mask),x) + torch.mul(mask,patch), requires_grad = True) ### putting patch to image
+    print(adv_x.requires_grad)
+    print(x.requires_grad)
+    exit()
     # vutils.save_image(orig_rgb.data, "orig_rgb.png", normalize=True)
 
     count = 0
@@ -421,10 +426,13 @@ def attack(x, patch, mask, orig_rgb):
 
     cosin_sim = 1
 
+    optimizer = torch.optim.Adam([patch])
+
+
     while cosin_sim > 0.2:
         count += 1
 
-        adv_x = Variable(adv_x.data, requires_grad=True)
+        # adv_x = Variable(adv_x, requires_grad=True)
 
         ### Transforming image for arcface (RGB -> grayscale)
         r = adv_x[:, 0, :, :].reshape((128, 128))
@@ -450,20 +458,30 @@ def attack(x, patch, mask, orig_rgb):
         # Loss = -adv_out[0][target]
         # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
         # Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
-        # Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + natural_regul
-        Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + 100 *natural_regul
-        Loss.backward()
+        Loss = 100 * F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))
+        # Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + 100 *natural_regul
+        # Loss = 1 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + natural_regul
+        # Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024))
 
-        adv_x_grad = adv_x.grad.clone()
+    
+        optimizer.zero_grad()
+        Loss.backward()
+        print(adv_x.grad)
+        print(patch.grad)
+        exit()
+        optimizer.step()
+
+        # adv_x_grad = adv_x.grad.clone()
         
-        adv_x.grad.data.zero_()
+        # adv_x.grad.data.zero_()
 
         # if count % 100 == 0:
         #     print(adv_x_grad)
 
-        patch -= adv_x_grad
+        # patch -= adv_x_grad
 
-        adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
+        # adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
+        adv_x = Variable(torch.mul((1-mask),x) + torch.mul(mask,patch), requires_grad = True) ### putting patch to image
         adv_x = torch.clamp(adv_x, min_out, max_out)
 
         r = r.detach()
@@ -475,22 +493,28 @@ def attack(x, patch, mask, orig_rgb):
 
         cosin_sim = cosin_metric(cur_vec, new_vec)
 
-        # if count % 100 == 0:
-        #     print("Iteration: ")
-        #     print(count)
-        #     print("Cosine similarity: ")
-        #     print(cosin_sim)
-        #     print("Naturalness loss: ")
-        #     print(natural_regul)
-            # vutils.save_image(adv_x.data, str(count) + ".png", normalize=True)
+        print(cosin_sim)
+
+        if count % 100 == 0:
+            # print("Iteration: ")
+            # print(count)
+            # print("Cosine similarity: ")
+            # print(cosin_sim)
+            # print("Naturalness loss: ")
+            # print(natural_regul)
+            tmp = adv_x.clone().detach()
+            vutils.save_image(tmp.data, './training image/' + str(count) + ".png")
 
 
-        if count >= opt.max_count:
-            break
+        # if count >= opt.max_count:
+        #     break
 
     # print("Total iteration: ")
     # print(count)
     # exit()
+
+    print(cosin_sim)
+    exit()
 
     return adv_x, mask, patch 
 

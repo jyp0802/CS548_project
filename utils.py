@@ -153,9 +153,12 @@ def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc):
     m_size = patch_shape[-1]
     
     for i in range(x.shape[0]):
+    # for i in range(1, 360):
 
         # random rotation
         rot = np.random.choice(360)
+        # rot = i
+
         for j in range(patch[i].shape[0]):
             patch[i][j] = rotate(patch[i][j], angle=rot, reshape=False)
         
