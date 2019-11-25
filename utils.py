@@ -171,11 +171,13 @@ def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc):
 
         random_x = patch_loc[1]
         random_y = patch_loc[0]
+
+        diameter = int(patch_shape[-1]/2)
        
         # apply patch to dummy image  
-        x[i][0][random_x:random_x+patch_shape[-1], random_y:random_y+patch_shape[-1]] = patch[i][0]
-        x[i][1][random_x:random_x+patch_shape[-1], random_y:random_y+patch_shape[-1]] = patch[i][1]
-        x[i][2][random_x:random_x+patch_shape[-1], random_y:random_y+patch_shape[-1]] = patch[i][2]
+        x[i][0][random_x-diameter:random_x+diameter, random_y-diameter:random_y+diameter] = patch[i][0]
+        x[i][1][random_x-diameter:random_x+diameter, random_y-diameter:random_y+diameter] = patch[i][1]
+        x[i][2][random_x-diameter:random_x+diameter, random_y-diameter:random_y+diameter] = patch[i][2]
     
     mask = np.copy(x)
     mask[mask != 0] = 1.0
