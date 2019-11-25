@@ -189,6 +189,10 @@ def find_cheek(orig_image, orig_image_size):
     image = orig_image.clone()
     image = F.interpolate(image, size=500).cpu().numpy()[0]
 
+    # vutils.save_image(image.data, "0.png", normalize=True)
+
+    # image = image.cpu().numpy()[0]
+
     r = image[0]
     g = image[1]
     b = image[2]
@@ -238,12 +242,12 @@ def find_cheek(orig_image, orig_image_size):
             if name in target:
                 temp = (0,0)
                 point_num = len(shape[i:j])
-                print('length of shape point is {}'.format(len(shape[i:j])))
+                # print('length of shape point is {}'.format(len(shape[i:j])))
 
                 for (x, y) in shape[i:j]:
                     
                     temp = (temp[0]+ x, temp[1]+y)
-                    print('sum of xy = {}'.format(temp))
+                    # print('sum of xy = {}'.format(temp))
                     cv2.circle(clone, (x, y), 1, (0, 0, 255), -1)
                     #print(x,y)
                     # print(5)
@@ -294,7 +298,7 @@ def cosin_metric(x1, x2):
     return np.array([np.dot(d1, d2) / (np.linalg.norm(d1) * np.linalg.norm(d2))])
 
 
-def train(epoch, patch, patch_shape, patch_type):
+def train(epoch):
 
     netClassifier.eval()
     success = 0
@@ -302,10 +306,14 @@ def train(epoch, patch, patch_shape, patch_type):
     recover_time = 0
     for batch_idx, (data, labels) in enumerate(train_loader):
 
-        patch_loc, patch_size = find_cheek(data, image_size)
+        patch_loc, r_length = find_cheek(data, image_size)
+
+        # print("patch location: ")
+        # print("x: " + str(patch_loc[0]))
+        # print("y: " + str(patch_loc[1]))
 
         if patch_type == 'circle':
-            patch, patch_shape = init_patch_circle(image_size, patch_size)
+            patch, patch_shape = init_patch_circle(image_size, patch_size, r_length)
         elif patch_type == 'square':
             patch, patch_shape = init_patch_square(image_size, patch_size) 
         else:
@@ -321,7 +329,7 @@ def train(epoch, patch, patch_shape, patch_type):
         # transform path
         data_shape = data.data.cpu().numpy().shape
         if patch_type == 'circle':
-            patch, mask, patch_shape = circle_transform(patch, data_shape, patch_shape, image_size, patch_loc, patch_size)
+            patch, mask, patch_shape = circle_transform(patch, data_shape, patch_shape, image_size, patch_loc)
         elif patch_type == 'square':
             patch, mask  = square_transform(patch, data_shape, patch_shape, image_size)
         patch, mask = torch.FloatTensor(patch), torch.FloatTensor(mask)
@@ -416,6 +424,8 @@ def attack(x, patch, mask):
 
     adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch) ### putting patch to image
 
+    # vutils.save_image(adv_x.data, "2.png", normalize=True)
+
     count = 0
 
     cur_vec = cur_vec.cpu()
@@ -498,5 +508,5 @@ if __name__ == '__main__':
     #     sys.exit("Please choose a square or circle patch")
     
     for epoch in range(1, opt.epochs + 1):
-        patch = train(epoch, patch, patch_shape, patch_type)
+        patch = train(epoch)
         # test(epoch, patch, patch_shape)

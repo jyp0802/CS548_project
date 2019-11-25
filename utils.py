@@ -127,10 +127,11 @@ class ToRange255(object):
         return tensor
 
 
-def init_patch_circle(image_size, patch_size):
+def init_patch_circle(image_size, patch_size, radius):
     image_size = image_size**2
-    noise_size = int(image_size*patch_size)
-    radius = int(math.sqrt(noise_size/math.pi))
+    # noise_size = int(image_size*patch_size)
+    noise_size = int(radius * radius * math.pi)
+    # radius = int(math.sqrt(noise_size/math.pi))
     patch = np.zeros((1, 3, radius*2, radius*2))    
     for i in range(3):
         a = np.zeros((radius*2, radius*2))    
@@ -144,7 +145,7 @@ def init_patch_circle(image_size, patch_size):
     return patch, patch.shape
 
 
-def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc, patch_size):
+def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc):
     # get dummy image 
     x = np.zeros(data_shape)
    
@@ -159,14 +160,17 @@ def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc, patc
             patch[i][j] = rotate(patch[i][j], angle=rot, reshape=False)
         
         # random location
-        random_x = np.random.choice(image_size)
-        if random_x + m_size > x.shape[-1]:
-            while random_x + m_size > x.shape[-1]:
-                random_x = np.random.choice(image_size)
-        random_y = np.random.choice(image_size)
-        if random_y + m_size > x.shape[-1]:
-            while random_y + m_size > x.shape[-1]:
-                random_y = np.random.choice(image_size)
+        # random_x = np.random.choice(image_size)
+        # if random_x + m_size > x.shape[-1]:
+        #     while random_x + m_size > x.shape[-1]:
+        #         random_x = np.random.choice(image_size)
+        # random_y = np.random.choice(image_size)
+        # if random_y + m_size > x.shape[-1]:
+        #     while random_y + m_size > x.shape[-1]:
+        #         random_y = np.random.choice(image_size)
+
+        random_x = patch_loc[1]
+        random_y = patch_loc[0]
        
         # apply patch to dummy image  
         x[i][0][random_x:random_x+patch_shape[-1], random_y:random_y+patch_shape[-1]] = patch[i][0]
@@ -176,7 +180,7 @@ def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc, patc
     mask = np.copy(x)
     mask[mask != 0] = 1.0
     
-    return x, mask, patch.shape, under_patch_rgb
+    return x, mask, patch.shape
 
 
 def init_patch_square(image_size, patch_size):
