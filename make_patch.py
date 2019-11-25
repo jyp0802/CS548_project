@@ -39,7 +39,7 @@ parser.add_argument('--target', type=int, default=859, help='The target class: 8
 parser.add_argument('--conf_target', type=float, default=0.9, help='Stop attack on image when target classifier reaches this value for target class')
 
 # parser.add_argument('--max_count', type=int, default=1000, help='max number of iterations to find adversarial example')
-parser.add_argument('--max_count', type=int, default=2000, help='max number of iterations to find adversarial example')
+parser.add_argument('--max_count', type=int, default=1000, help='max number of iterations to find adversarial example')
 parser.add_argument('--patch_type', type=str, default='circle', help='patch type: circle or square')
 parser.add_argument('--patch_size', type=float, default=0.05, help='patch size. E.g. 0.05 ~= 5% of image ')
 
@@ -179,19 +179,10 @@ min_out, max_out = np.min((min_in-mean)/std), np.max((max_in-mean)/std)
 
 ### Finding patch centre and patch size. orig_image: tensor
 def find_cheek(orig_image, orig_image_size):
-    # print(1)
-    # image = image.cpu().numpy()
-    # # print(2)
-    # print(type(image))
-    # print(image.shape)
 
     ratio = orig_image_size / 500
     image = orig_image.clone()
     image = F.interpolate(image, size=500).cpu().numpy()[0]
-
-    # vutils.save_image(image.data, "0.png", normalize=True)
-
-    # image = image.cpu().numpy()[0]
 
     r = image[0]
     g = image[1]
@@ -205,19 +196,10 @@ def find_cheek(orig_image, orig_image_size):
         rgb.append(tmp)
 
     rgb = np.ndarray.round(np.array(rgb)*255).astype(np.uint8)
-    # print(rgb.shape)
-    # print(type(rgb))
-    # print(rgb[0][0])
-
     gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
-    # print(gray.shape)
-    # print(type(gray))
-    # print(gray)
 
     rects = detector(gray, 1)
-    # print('rects is {}'.format(rects))
-    # print(2)
-
+ 
     target = [ 'mouth' , 'right_eye' , 'nose']
 
     mouth_loc =(0,0)
@@ -226,7 +208,7 @@ def find_cheek(orig_image, orig_image_size):
     patch_center = (0,0)
     # loop over the face detections
     for (i, rect) in enumerate(rects):
-        print('rects in for loop = {}'.format(rect))
+        # print('rects in for loop = {}'.format(rect))
         shape = predictor(gray, rect)
         shape = face_utils.shape_to_np(shape)
         # print(3)
@@ -336,16 +318,18 @@ def train(epoch):
         if opt.cuda:
             patch, mask = patch.cuda(), mask.cuda()
         patch, mask = Variable(patch), Variable(mask)
- 
-        adv_x, mask, patch = attack(data, patch, mask)
 
-      
+        mask_rgb = torch.mul(mask, data)
+ 
+        adv_x, mask, patch = attack(data, patch, mask, mask_rgb)
+     
         if plot_all == 1: 
             # plot source image
             vutils.save_image(data.data, "./%s/%d_original.png" %(opt.outf, batch_idx), normalize=True)
             
             # plot adversarial image
-            vutils.save_image(adv_x.data, "./%s/%d_adversarial.png" %(opt.outf, batch_idx), normalize=True)
+            # vutils.save_image(adv_x.data, "./%s/%d_adversarial.png" %(opt.outf, batch_idx), normalize=True)
+            vutils.save_image(adv_x.data, "./%s/%d_adversarial.png" %(opt.outf, batch_idx))
  
         masked_patch = torch.mul(mask, patch)
         patch = masked_patch.data.cpu().numpy()
@@ -413,9 +397,13 @@ def test(epoch, patch, patch_shape):
         progress_bar(batch_idx, len(test_loader), "Test Success: {:.3f}".format(success/total))
 
 
-def attack(x, patch, mask):
+def attack(x, patch, mask, orig_rgb):
 
     netClassifier.eval()
+
+    # print(orig_rgb[0][0][0])
+    # print(orig_rgb[0][1][0])
+    # print(orig_rgb[0][2][0])
 
     x_d = arcface_transform(x) ### image transformed for arcface
 
@@ -424,7 +412,7 @@ def attack(x, patch, mask):
 
     adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch) ### putting patch to image
 
-    # vutils.save_image(adv_x.data, "2.png", normalize=True)
+    # vutils.save_image(orig_rgb.data, "orig_rgb.png", normalize=True)
 
     count = 0
 
@@ -451,15 +439,19 @@ def attack(x, patch, mask):
         x_d /=127.5
 
         new_vec = netClassifier(x_d).cpu()
-        
+
         ### Loss function.
         ### 1) Naturalness loss should be added
         ### 2) Gradient vanishing problem should be addressed
+
+        ### Naturalness regularization. 
+        patch_rgb = torch.mul(mask, patch)
+        natural_regul = F.l1_loss(orig_rgb.view(1, -1), patch_rgb.view(1, -1))
         # Loss = -adv_out[0][target]
         # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
         # Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
-        # Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))
-        Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024))
+        # Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + natural_regul
+        Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + 100 *natural_regul
         Loss.backward()
 
         adv_x_grad = adv_x.grad.clone()
@@ -483,11 +475,15 @@ def attack(x, patch, mask):
 
         cosin_sim = cosin_metric(cur_vec, new_vec)
 
-        if count % 100 == 0:
-            print("Iteration: ")
-            print(count)
-            print("Cosine similarity: ")
-            print(cosin_sim)
+        # if count % 100 == 0:
+        #     print("Iteration: ")
+        #     print(count)
+        #     print("Cosine similarity: ")
+        #     print(cosin_sim)
+        #     print("Naturalness loss: ")
+        #     print(natural_regul)
+            # vutils.save_image(adv_x.data, str(count) + ".png", normalize=True)
+
 
         if count >= opt.max_count:
             break
