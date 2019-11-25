@@ -24,6 +24,9 @@ from torch.nn import DataParallel
 
 from PIL import Image
 import cv2
+from imutils import face_utils
+import imutils
+import dlib
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -35,18 +38,22 @@ parser.add_argument('--cuda', action='store_true', help='enables cuda')
 parser.add_argument('--target', type=int, default=859, help='The target class: 859 == toaster')
 parser.add_argument('--conf_target', type=float, default=0.9, help='Stop attack on image when target classifier reaches this value for target class')
 
-parser.add_argument('--max_count', type=int, default=100, help='max number of iterations to find adversarial example')
+# parser.add_argument('--max_count', type=int, default=1000, help='max number of iterations to find adversarial example')
+parser.add_argument('--max_count', type=int, default=2000, help='max number of iterations to find adversarial example')
 parser.add_argument('--patch_type', type=str, default='circle', help='patch type: circle or square')
 parser.add_argument('--patch_size', type=float, default=0.05, help='patch size. E.g. 0.05 ~= 5% of image ')
 
 parser.add_argument('--train_size', type=int, default=10, help='Number of training images')
 parser.add_argument('--test_size', type=int, default=2000, help='Number of test images')
 
-parser.add_argument('--image_size', type=int, default=299, help='the height / width of the input image to network')
+# parser.add_argument('--image_size', type=int, default=299, help='the height / width of the input image to network')
+parser.add_argument('--image_size', type=int, default=128, help='the height / width of the input image to network')
 
 parser.add_argument('--plot_all', type=int, default=1, help='1 == plot all successful adversarial images')
 
 parser.add_argument('--netClassifier', default='inceptionv3', help="The target classifier")
+
+parser.add_argument('--shape_predictor', default='shape_predictor_68_face_landmarks.dat',help="path to facial landmark predictor")
 
 parser.add_argument('--outf', default='./logs', help='folder to output images and model checkpoints')
 parser.add_argument('--manualSeed', type=int, default=1338, help='manual seed')
@@ -82,8 +89,13 @@ image_size = opt.image_size
 train_size = opt.train_size
 test_size = opt.test_size
 plot_all = opt.plot_all 
+predic = opt.shape_predictor
 
 assert train_size + test_size <= 13233, "Traing set size + Test set size > Total dataset size"
+
+### Face detection model load ###
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor(predic)
 
 
 ### Arcface model load ###
@@ -165,9 +177,97 @@ min_in, max_in = np.array([min_in, min_in, min_in]), np.array([max_in, max_in, m
 mean, std = np.array([0.5, 0.5, 0.5]), np.array([0.5, 0.5, 0.5]) 
 min_out, max_out = np.min((min_in-mean)/std), np.max((max_in-mean)/std)
 
+### Finding patch centre and patch size. orig_image: tensor
+def find_cheek(orig_image, orig_image_size):
+    # print(1)
+    # image = image.cpu().numpy()
+    # # print(2)
+    # print(type(image))
+    # print(image.shape)
+
+    ratio = orig_image_size / 500
+    image = orig_image.clone()
+    image = F.interpolate(image, size=500).cpu().numpy()[0]
+
+    r = image[0]
+    g = image[1]
+    b = image[2]
+    rgb = []
+
+    for i in range(500):
+        tmp = []
+        for j in range(500):
+            tmp.append([r[i][j], g[i][j], b[i][j]])
+        rgb.append(tmp)
+
+    rgb = np.ndarray.round(np.array(rgb)*255).astype(np.uint8)
+    # print(rgb.shape)
+    # print(type(rgb))
+    # print(rgb[0][0])
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
+    # print(gray.shape)
+    # print(type(gray))
+    # print(gray)
+
+    rects = detector(gray, 1)
+    # print('rects is {}'.format(rects))
+    # print(2)
+
+    target = [ 'mouth' , 'right_eye' , 'nose']
+
+    mouth_loc =(0,0)
+    eye_loc = (0,0)
+    nose_loc = (0,0)
+    patch_center = (0,0)
+    # loop over the face detections
+    for (i, rect) in enumerate(rects):
+        print('rects in for loop = {}'.format(rect))
+        shape = predictor(gray, rect)
+        shape = face_utils.shape_to_np(shape)
+        # print(3)
+
+        #print(face_utils.FACIAL_LANDMARKS_IDXS.items())
+
+        for (name, (i, j)) in face_utils.FACIAL_LANDMARKS_IDXS.items():
+            clone = rgb.copy()
+            # cv2.putText(clone, name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            # cv2.circle(clone, (i, j), 1, (200, 200, 200), 5)
+            # print(4)
+
+            if name in target:
+                temp = (0,0)
+                point_num = len(shape[i:j])
+                print('length of shape point is {}'.format(len(shape[i:j])))
+
+                for (x, y) in shape[i:j]:
+                    
+                    temp = (temp[0]+ x, temp[1]+y)
+                    print('sum of xy = {}'.format(temp))
+                    cv2.circle(clone, (x, y), 1, (0, 0, 255), -1)
+                    #print(x,y)
+                    # print(5)
+
+                    if name is 'mouth':
+                        mouth_loc = (int(temp[0]/point_num), int(temp[1]/point_num))
+
+                    elif name is 'right_eye':
+                        eye_loc = (int(temp[0]/point_num) , int(temp[1]/point_num))
+
+                    elif name is 'nose':
+                        nose_loc = (int(temp[0]/point_num) , int(temp[1]/point_num))
+            else:
+                pass
+
+            x_dif = nose_loc[0] - eye_loc[0]
+            y_dif = nose_loc[1] - eye_loc[1]
+
+            patch_center = (round((eye_loc[0]-x_dif*0.4)*ratio) , round((nose_loc[1] - int(y_dif*0.1))*ratio))
+
+
+    return patch_center, round(y_dif*0.6*ratio)
 
 ### Transforming image for arcface
-
 def arcface_transform(x):
 
     r = x[:, 0, :, :].reshape((128, 128))
@@ -184,7 +284,6 @@ def arcface_transform(x):
     return x_d
 
 ### Cosine similarity metric
-
 def cosin_metric(x1, x2):
     d1 = x1.clone().detach().numpy()
     d2 = x2.clone().detach().numpy()
@@ -195,13 +294,22 @@ def cosin_metric(x1, x2):
     return np.array([np.dot(d1, d2) / (np.linalg.norm(d1) * np.linalg.norm(d2))])
 
 
+def train(epoch, patch, patch_shape, patch_type):
 
-def train(epoch, patch, patch_shape):
     netClassifier.eval()
     success = 0
     total = 0
     recover_time = 0
     for batch_idx, (data, labels) in enumerate(train_loader):
+
+        patch_loc, patch_size = find_cheek(data, image_size)
+
+        if patch_type == 'circle':
+            patch, patch_shape = init_patch_circle(image_size, patch_size)
+        elif patch_type == 'square':
+            patch, patch_shape = init_patch_square(image_size, patch_size) 
+        else:
+            sys.exit("Please choose a square or circle patch")
 
         if opt.cuda:
             data = data.cuda()
@@ -213,7 +321,7 @@ def train(epoch, patch, patch_shape):
         # transform path
         data_shape = data.data.cpu().numpy().shape
         if patch_type == 'circle':
-            patch, mask, patch_shape = circle_transform(patch, data_shape, patch_shape, image_size)
+            patch, mask, patch_shape = circle_transform(patch, data_shape, patch_shape, image_size, patch_loc, patch_size)
         elif patch_type == 'square':
             patch, mask  = square_transform(patch, data_shape, patch_shape, image_size)
         patch, mask = torch.FloatTensor(patch), torch.FloatTensor(mask)
@@ -348,8 +456,8 @@ def attack(x, patch, mask):
         
         adv_x.grad.data.zero_()
 
-        if count % 100 == 0:
-            print(adv_x_grad)
+        # if count % 100 == 0:
+        #     print(adv_x_grad)
 
         patch -= adv_x_grad
 
@@ -366,24 +474,29 @@ def attack(x, patch, mask):
         cosin_sim = cosin_metric(cur_vec, new_vec)
 
         if count % 100 == 0:
+            print("Iteration: ")
+            print(count)
             print("Cosine similarity: ")
             print(cosin_sim)
 
         if count >= opt.max_count:
             break
 
+    # print("Total iteration: ")
+    # print(count)
+    # exit()
 
     return adv_x, mask, patch 
 
 
 if __name__ == '__main__':
-    if patch_type == 'circle':
-        patch, patch_shape = init_patch_circle(image_size, patch_size) 
-    elif patch_type == 'square':
-        patch, patch_shape = init_patch_square(image_size, patch_size) 
-    else:
-        sys.exit("Please choose a square or circle patch")
+    # if patch_type == 'circle':
+    #     patch, patch_shape = init_patch_circle(image_size, patch_size)
+    # elif patch_type == 'square':
+    #     patch, patch_shape = init_patch_square(image_size, patch_size) 
+    # else:
+    #     sys.exit("Please choose a square or circle patch")
     
     for epoch in range(1, opt.epochs + 1):
-        patch = train(epoch, patch, patch_shape)
+        patch = train(epoch, patch, patch_shape, patch_type)
         # test(epoch, patch, patch_shape)

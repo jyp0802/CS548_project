@@ -144,7 +144,7 @@ def init_patch_circle(image_size, patch_size):
     return patch, patch.shape
 
 
-def circle_transform(patch, data_shape, patch_shape, image_size):
+def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc, patch_size):
     # get dummy image 
     x = np.zeros(data_shape)
    
@@ -176,7 +176,7 @@ def circle_transform(patch, data_shape, patch_shape, image_size):
     mask = np.copy(x)
     mask[mask != 0] = 1.0
     
-    return x, mask, patch.shape
+    return x, mask, patch.shape, under_patch_rgb
 
 
 def init_patch_square(image_size, patch_size):
