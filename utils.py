@@ -122,6 +122,15 @@ class ToRange255(object):
     def __init__(self, is_255):
         self.is_255 = is_255
     def __call__(self, tensor):
+        # print(tensor)
+        # tmp = tensor.clone().numpy()
+        # if(tmp.any() > 1):
+        #     return tensor
+        # else:
+        #     print('yes')
+        #     tensor.mul_(255)
+        #     return tensor
+
         if self.is_255:
             tensor.mul_(255)
         return tensor
@@ -153,12 +162,9 @@ def circle_transform(patch, data_shape, patch_shape, image_size, patch_loc):
     m_size = patch_shape[-1]
     
     for i in range(x.shape[0]):
-    # for i in range(1, 360):
 
         # random rotation
         rot = np.random.choice(360)
-        # rot = i
-
         for j in range(patch[i].shape[0]):
             patch[i][j] = rotate(patch[i][j], angle=rot, reshape=False)
         

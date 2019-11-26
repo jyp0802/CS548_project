@@ -135,14 +135,11 @@ test_idx = idx[train_size:test_size]
 
 train_loader = torch.utils.data.DataLoader(
     dset.ImageFolder('./imagenetdata/val', transforms.Compose([
-        # transforms.Scale(round(max([3, 128, 128])*1.050)),
         transforms.Scale(round(max([3, 128, 128]))),
-        # transforms.CenterCrop(max([3, 128, 128])),
         transforms.ToTensor(),
         ToSpaceBGR('RGB'=='BGR'),
-        # ToSpaceBGR('RGB'=='RGB'),
-        ToRange255(max([0, 1])==255),
-        # normalize,
+        ToRange255(False),
+        # ToRange255(),
     ])),
     batch_size=1, shuffle=False, sampler=SubsetRandomSampler(training_idx),
     num_workers=opt.workers, pin_memory=True)
@@ -166,7 +163,7 @@ test_loader = torch.utils.data.DataLoader(
         transforms.ToTensor(),
         # ToSpaceBGR('RGB'=='BGR'),
         ToSpaceBGR('RGB'=='RGB'),
-        ToRange255(max([0,1])==255),
+        # ToRange255(max([0,1])==255),
         normalize,
     ])),
     batch_size=1, shuffle=False, sampler=SubsetRandomSampler(test_idx),
@@ -184,18 +181,22 @@ def find_cheek(orig_image, orig_image_size):
     image = orig_image.clone()
     image = F.interpolate(image, size=500).cpu().numpy()[0]
 
+    print("image")
+    print(image)
+
     r = image[0]
     g = image[1]
     b = image[2]
     rgb = []
-
     for i in range(500):
         tmp = []
         for j in range(500):
-            tmp.append([r[i][j], g[i][j], b[i][j]])
+            tmp.append([r[i][j]*255, g[i][j]*255, b[i][j]*255])
         rgb.append(tmp)
 
-    rgb = np.ndarray.round(np.array(rgb)*255).astype(np.uint8)
+    rgb = np.ndarray.round(np.array(rgb)).astype(np.uint8)
+    # print('rgb')
+    # print(rgb)
     gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
 
     rects = detector(gray, 1)
@@ -206,33 +207,22 @@ def find_cheek(orig_image, orig_image_size):
     eye_loc = (0,0)
     nose_loc = (0,0)
     patch_center = (0,0)
-    # loop over the face detections
     for (i, rect) in enumerate(rects):
-        # print('rects in for loop = {}'.format(rect))
         shape = predictor(gray, rect)
         shape = face_utils.shape_to_np(shape)
-        # print(3)
-
-        #print(face_utils.FACIAL_LANDMARKS_IDXS.items())
 
         for (name, (i, j)) in face_utils.FACIAL_LANDMARKS_IDXS.items():
             clone = rgb.copy()
-            # cv2.putText(clone, name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            # cv2.circle(clone, (i, j), 1, (200, 200, 200), 5)
-            # print(4)
+
 
             if name in target:
                 temp = (0,0)
                 point_num = len(shape[i:j])
-                # print('length of shape point is {}'.format(len(shape[i:j])))
 
                 for (x, y) in shape[i:j]:
                     
                     temp = (temp[0]+ x, temp[1]+y)
-                    # print('sum of xy = {}'.format(temp))
                     cv2.circle(clone, (x, y), 1, (0, 0, 255), -1)
-                    #print(x,y)
-                    # print(5)
 
                     if name is 'mouth':
                         mouth_loc = (int(temp[0]/point_num), int(temp[1]/point_num))
@@ -250,15 +240,15 @@ def find_cheek(orig_image, orig_image_size):
 
             patch_center = (round((eye_loc[0]-x_dif*0.4)*ratio) , round((nose_loc[1] - int(y_dif*0.1))*ratio))
 
-
     return patch_center, round(y_dif*0.6*ratio)
 
 ### Transforming image for arcface
 def arcface_transform(x):
 
+    x = x.mul_(255)
     r = x[:, 0, :, :].reshape((128, 128))
-    g = x[:, 1, :, :].reshape((128, 128)).requires_grad_(True)
-    b = x[:, 2, :, :].reshape((128, 128)).requires_grad_(True)
+    g = x[:, 1, :, :].reshape((128, 128))
+    b = x[:, 2, :, :].reshape((128, 128))
 
     x_d = (r*0.2989 + g*0.5870 + b*0.1140)
     x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
@@ -268,6 +258,22 @@ def arcface_transform(x):
     x_d /=127.5
 
     return x_d
+
+### Load image for arcface
+def load_image(img_path):
+    image = cv2.imread(img_path, 0)
+    if image is None:
+        return None
+
+    image = np.dstack((image, np.fliplr(image)))
+    image = image.transpose((2, 0, 1))
+    image = image[:, np.newaxis, :, :]
+    image = image.astype(np.float32, copy=False)
+    image /= 250
+    image -= 0.5
+    image *= 2
+
+    return image
 
 ### Cosine similarity metric
 def cosin_metric(x1, x2):
@@ -288,11 +294,12 @@ def train(epoch):
     recover_time = 0
     for batch_idx, (data, labels) in enumerate(train_loader):
 
-        patch_loc, r_length = find_cheek(data, image_size)
+        # vutils.save_image(data.data, 'patch_data.png')
+        # print("data")
+        print("data")
+        print(data.clone().data)
 
-        # print("patch location: ")
-        # print("x: " + str(patch_loc[0]))
-        # print("y: " + str(patch_loc[1]))
+        patch_loc, r_length = find_cheek(data, image_size)
 
         if patch_type == 'circle':
             patch, patch_shape = init_patch_circle(image_size, patch_size, r_length)
@@ -317,9 +324,12 @@ def train(epoch):
         patch, mask = torch.FloatTensor(patch), torch.FloatTensor(mask)
         if opt.cuda:
             patch, mask = patch.cuda(), mask.cuda()
-        patch, mask = Variable(patch, requires_grad = True), Variable(mask, requires_grad = True)
+        patch, mask = Variable(patch), Variable(mask)
 
-        mask_rgb = torch.mul(mask, data)
+        mask_rgb = torch.mul(mask, data.clone())
+
+        print("after")
+        print(data.data)
  
         adv_x, mask, patch = attack(data, patch, mask, mask_rgb)
      
@@ -328,7 +338,6 @@ def train(epoch):
             vutils.save_image(data.data, "./%s/%d_original.png" %(opt.outf, batch_idx), normalize=True)
             
             # plot adversarial image
-            # vutils.save_image(adv_x.data, "./%s/%d_adversarial.png" %(opt.outf, batch_idx), normalize=True)
             vutils.save_image(adv_x.data, "./%s/%d_adversarial.png" %(opt.outf, batch_idx))
  
         masked_patch = torch.mul(mask, patch)
@@ -358,10 +367,6 @@ def test(epoch, patch, patch_shape):
 
         prediction = netClassifier(data)
 
-        # only computer adversarial examples on examples that are originally classified correctly        
-        # if prediction.data.max(1)[1][0] != labels.data[0]:
-        #     continue
-      
         total += 1 
         
         # transform path
@@ -401,40 +406,53 @@ def attack(x, patch, mask, orig_rgb):
 
     netClassifier.eval()
 
-    # print(orig_rgb[0][0][0])
-    # print(orig_rgb[0][1][0])
-    # print(orig_rgb[0][2][0])
+    # print("inside")
+    # print(x.data)
 
-    # print(patch.requires_grad)
-    # exit()
+    another1 = load_image("C:/Users/NMAIL/Desktop/Kim_Ryong-sung_0001.jpg")
+    another1 = torch.from_numpy(another1).to(device)
+    vutils.save_image(another1.clone().detach().data, "0.png")
+    print(another1)
 
-    x_d = arcface_transform(x) ### image transformed for arcface
+    another1_vec = netClassifier(another1)
 
-    cur_vec = netClassifier(x_d) 
+    another2 = load_image("C:/Users/NMAIL/Desktop/Kim_Ryong-sung_0007.jpg")
+    print(another2)
+    another2 = torch.from_numpy(another2).to(device)
+    vutils.save_image(another2.clone().detach().data, "1.png")
+    print(another2)
+
+    another2_vec = netClassifier(another2)
+
+    print(cosin_metric(another1_vec.cpu(), another2_vec.cpu()))
+
+    adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch) ### putting patch to image
+    vutils.save_image(adv_x.data, 'patch_data.png')
+
+    x_d = arcface_transform(x.clone()) ### image transformed for arcface
+
+    cur_vec = netClassifier(x_d)
     new_vec = cur_vec
-
-    adv_x = Variable(torch.mul((1-mask),x) + torch.mul(mask,patch), requires_grad = True) ### putting patch to image
-    print(adv_x.requires_grad)
-    print(x.requires_grad)
-    exit()
-    # vutils.save_image(orig_rgb.data, "orig_rgb.png", normalize=True)
 
     count = 0
 
     cur_vec = cur_vec.cpu()
     new_vec = new_vec.cpu()
 
+    # print(cosin_metric(another1_vec.cpu(), cur_vec))
+    # exit()
+
     cosin_sim = 1
-
-    optimizer = torch.optim.Adam([patch])
-
 
     while cosin_sim > 0.2:
         count += 1
 
-        # adv_x = Variable(adv_x, requires_grad=True)
+        # adv_x = adv_x.mul_(255)
+
+        adv_x = adv_x.requires_grad_(True)
 
         ### Transforming image for arcface (RGB -> grayscale)
+        
         r = adv_x[:, 0, :, :].reshape((128, 128))
         g = adv_x[:, 1, :, :].reshape((128, 128))
         b = adv_x[:, 2, :, :].reshape((128, 128))
@@ -443,8 +461,14 @@ def attack(x, patch, mask, orig_rgb):
         x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
         x_d = x_d.permute(2, 0, 1)
         x_d = x_d.unsqueeze(1)
-        x_d -= 127.5
-        x_d /=127.5
+        # x_d -= 127.5
+        # x_d /=127.5
+        x_d -= 0.5
+        x_d *= 2
+
+        print(x_d[0][0][0])
+
+        print
 
         new_vec = netClassifier(x_d).cpu()
 
@@ -458,30 +482,21 @@ def attack(x, patch, mask, orig_rgb):
         # Loss = -adv_out[0][target]
         # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
         # Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
-        Loss = 100 * F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))
-        # Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + 100 *natural_regul
-        # Loss = 1 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + natural_regul
-        # Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024))
-
-    
-        optimizer.zero_grad()
+        # Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + natural_regul
+        Loss = 1 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024))
+        # Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), another_vec.view(1, 1024))
         Loss.backward()
-        print(adv_x.grad)
-        print(patch.grad)
-        exit()
-        optimizer.step()
 
-        # adv_x_grad = adv_x.grad.clone()
+        adv_x_grad = adv_x.grad.clone()
         
-        # adv_x.grad.data.zero_()
+        adv_x.grad.data.zero_()
 
         # if count % 100 == 0:
         #     print(adv_x_grad)
 
-        # patch -= adv_x_grad
+        patch -= adv_x_grad
 
-        # adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
-        adv_x = Variable(torch.mul((1-mask),x) + torch.mul(mask,patch), requires_grad = True) ### putting patch to image
+        adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
         adv_x = torch.clamp(adv_x, min_out, max_out)
 
         r = r.detach()
@@ -490,30 +505,25 @@ def attack(x, patch, mask, orig_rgb):
         x_d = x_d.detach()
         new_vec = new_vec.detach()
         cur_vec = cur_vec.detach()
+        adv_x = adv_x.detach()
+        # another_vec = another_vec.detach()
 
         cosin_sim = cosin_metric(cur_vec, new_vec)
-
+        # cosin_sim = cosin_metric(another_vec, new_vec)
         print(cosin_sim)
 
-        if count % 100 == 0:
-            # print("Iteration: ")
-            # print(count)
-            # print("Cosine similarity: ")
-            # print(cosin_sim)
-            # print("Naturalness loss: ")
-            # print(natural_regul)
-            tmp = adv_x.clone().detach()
-            vutils.save_image(tmp.data, './training image/' + str(count) + ".png")
+        vutils.save_image(adv_x.clone().detach().data, './training images/' + str(count) + ".png")
 
+
+        # if count % 100 == 0:
+        #     tmp = adv_x.clone().detach()
+        #     vutils.save_image(tmp.data, './training images/' + str(count) + ".png")
 
         # if count >= opt.max_count:
         #     break
 
     # print("Total iteration: ")
     # print(count)
-    # exit()
-
-    print(cosin_sim)
     exit()
 
     return adv_x, mask, patch 
