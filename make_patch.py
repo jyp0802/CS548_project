@@ -158,7 +158,15 @@ train_loader = torch.utils.data.DataLoader(
 #     ])),
 #     batch_size=1, shuffle=False, sampler=SubsetRandomSampler(test_idx),
 #     num_workers=opt.workers, pin_memory=True)
-
+# train_loader = torch.utils.data.DataLoader(
+#     dset.ImageFolder('./imagenetdata/val', transforms.Compose([
+#         transforms.Scale(round(max([3, 128, 128]))),
+#         transforms.ToTensor(),
+#         ToSpaceBGR('RGB'=='BGR'),
+#         ToRange255(False),
+#     ])),
+#     batch_size=1, shuffle=False, sampler=SubsetRandomSampler(training_idx),
+#     num_workers=opt.workers, pin_memory=True)
 test_loader = torch.utils.data.DataLoader(
     dset.ImageFolder('./imagenetdata/val', transforms.Compose([
         transforms.Scale(round(max([3, 128, 128])*1.050)),
@@ -255,6 +263,8 @@ def find_cheek(orig_image, orig_image_size):
 
 ### Transforming image for arcface
 def arcface_transform(x):
+    print("in transform: ",x)
+    exit(0)
 
     r = x[:, 0, :, :].reshape((128, 128))
     g = x[:, 1, :, :].reshape((128, 128)).requires_grad_(True)
@@ -286,6 +296,7 @@ def train(epoch):
     success = 0
     total = 0
     recover_time = 0
+    patch = None
     for batch_idx, (data, labels) in enumerate(train_loader):
 
         patch_loc, r_length = find_cheek(data, image_size)
@@ -300,6 +311,8 @@ def train(epoch):
             patch, patch_shape = init_patch_square(image_size, patch_size) 
         else:
             sys.exit("Please choose a square or circle patch")
+        print(patch, patch_shape)
+
 
         if opt.cuda:
             data = data.cuda()
@@ -310,6 +323,7 @@ def train(epoch):
         
         # transform path
         data_shape = data.data.cpu().numpy().shape
+        print("patch type is: ",patch_type)
         if patch_type == 'circle':
             patch, mask, patch_shape = circle_transform(patch, data_shape, patch_shape, image_size, patch_loc)
         elif patch_type == 'square':
@@ -320,8 +334,12 @@ def train(epoch):
         patch, mask = Variable(patch), Variable(mask)
 
         mask_rgb = torch.mul(mask, data)
- 
-        adv_x, mask, patch = attack(data, patch, mask, mask_rgb)
+        cnt = 0 
+        for s in train_loader:
+            tmp_data, tmp_labels = s
+            if(cnt == 2):
+                break
+        adv_x, mask, patch = attack(data, patch, mask, mask_rgb, tmp_data)
      
         if plot_all == 1: 
             # plot source image
@@ -395,24 +413,61 @@ def test(epoch, patch, patch_shape):
 
         # log to file  
         progress_bar(batch_idx, len(test_loader), "Test Success: {:.3f}".format(success/total))
+def load_image(img_path):
+    image = cv2.imread(img_path, 0)
+    if image is None:
+        return None
+    image = np.dstack((image, np.fliplr(image)))
+    image = image.transpose((2, 0, 1))
+    image = image[:, np.newaxis, :, :]
+    image = image.astype(np.float32, copy=False)
+    image -= 127.5
+    image /= 127.5
+    return image
 
+def arcface_transform(x):
 
-def attack(x, patch, mask, orig_rgb):
+    r = x[:, 0, :, :].reshape((128, 128))
+    g = x[:, 1, :, :].reshape((128, 128)).requires_grad_(True)
+    b = x[:, 2, :, :].reshape((128, 128)).requires_grad_(True)
+
+    x_d = (r*0.2989 + g*0.5870 + b*0.1140)
+    x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
+    x_d = x_d.permute(2, 0, 1)
+    x_d = x_d.unsqueeze(1)
+    x_d -= 127.5
+    x_d /=127.5
+
+    return x_d
+
+def attack(x, patch, mask, orig_rgb,tmp_data):
 
     netClassifier.eval()
+    # print("ori x: ",x.shape)
+    x_d = load_image("checking1.png")
+    x_d2 = load_image("checking2.png")
 
-    # print(orig_rgb[0][0][0])
-    # print(orig_rgb[0][1][0])
-    # print(orig_rgb[0][2][0])
+    x_d = torch.from_numpy(x_d).to(device)
+    x_d2 = torch.from_numpy(x_d2).to(device)
 
-    x_d = arcface_transform(x) ### image transformed for arcface
+    # vutils.save_image(x_d.data, "xd_1.png")
+    print("printing: ",x_d.shape, x_d2.shape)
+    patch = x_d2
 
+    mask = torch.stack([mask[:,1,:,:],mask[:,1,:,:]],dim =0)
+    print("new mask = : ",mask.shape)
+    # patch = torch.stack([patch[:,1,:,:],patch[:,1,:,:]],dim = 0)
+    print("patch: ",patch.shape)
+    print(mask.shape, x.shape, x_d.shape, patch.shape)
+    adv_x = torch.mul((1-mask),x_d) + torch.mul(mask,patch)
     cur_vec = netClassifier(x_d) 
+    cur_vec2 = netClassifier(x_d2)
+    print("checking loader: ",cosin_metric(cur_vec.detach().cpu(), cur_vec2.detach().cpu()))
     new_vec = cur_vec
 
-    adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch) ### putting patch to image
-
-    # vutils.save_image(orig_rgb.data, "orig_rgb.png", normalize=True)
+    # adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch) ### putting patch to image
+    print(adv_x)
+    vutils.save_image(adv_x.clone().data, "ori_adv_x.png")
 
     count = 0
 
@@ -421,37 +476,39 @@ def attack(x, patch, mask, orig_rgb):
 
     cosin_sim = 1
 
-    while cosin_sim > 0.2:
+    while cosin_sim > 0.3:
         count += 1
 
         adv_x = Variable(adv_x.data, requires_grad=True)
 
         ### Transforming image for arcface (RGB -> grayscale)
-        r = adv_x[:, 0, :, :].reshape((128, 128))
-        g = adv_x[:, 1, :, :].reshape((128, 128))
-        b = adv_x[:, 2, :, :].reshape((128, 128))
+            # r = adv_x[:, 0, :, :].reshape((128, 128))
+            # g = adv_x[:, 1, :, :].reshape((128, 128))
+            # b = adv_x[:, 2, :, :].reshape((128, 128))
 
-        x_d = (r*0.2989 + g*0.5870 + b*0.1140)
-        x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
-        x_d = x_d.permute(2, 0, 1)
-        x_d = x_d.unsqueeze(1)
-        x_d -= 127.5
-        x_d /=127.5
+            # x_d = (r*0.2989 + g*0.5870 + b*0.1140)
+            # x_d = torch.stack([x_d, torch.flip(x_d, [1])], dim = 2)
+            # x_d = x_d.permute(2, 0, 1)
+            # x_d = x_d.unsqueeze(1)
+            # x_d -= 127.5
+            # x_d /=127.5
 
-        new_vec = netClassifier(x_d).cpu()
+        new_vec = netClassifier(adv_x).cpu()
 
         ### Loss function.
         ### 1) Naturalness loss should be added
         ### 2) Gradient vanishing problem should be addressed
 
         ### Naturalness regularization. 
-        patch_rgb = torch.mul(mask, patch)
-        natural_regul = F.l1_loss(orig_rgb.view(1, -1), patch_rgb.view(1, -1))
+        patch_rgb = torch.mul(mask, x_d)
+        # natural_regul = F.l1_loss(x_d.view(1, -1), adv_x.view(1, -1))
+        natural_regul = F.l1_loss(patch_rgb.view(1, -1), patch.view(1, -1))
+
         # Loss = -adv_out[0][target]
         # Loss = Variable(torch.from_numpy(-1 * cosin_metric(cur_vec, new_vec)), requires_grad = True)
         # Loss = F.cosine_embedding_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024), torch.tensor([1 for i in range(1024)]))
-        # Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + natural_regul
-        Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024)) + 100 *natural_regul
+        Loss = F.cosine_similarity(new_vec.view(1, 1024), cur_vec.view(1, 1024))*10  + natural_regul * 1000000000
+        # Loss = 10000 / F.l1_loss(new_vec.view(1, 1024), cur_vec.view(1, 1024))# + 100 *natural_regul
         Loss.backward()
 
         adv_x_grad = adv_x.grad.clone()
@@ -461,20 +518,20 @@ def attack(x, patch, mask, orig_rgb):
         # if count % 100 == 0:
         #     print(adv_x_grad)
 
-        patch -= adv_x_grad
+        patch -= adv_x_grad * 0.01
 
-        adv_x = torch.mul((1-mask),x) + torch.mul(mask,patch)
-        adv_x = torch.clamp(adv_x, min_out, max_out)
+        adv_x = torch.mul((1-mask),x_d) + torch.mul(mask,patch)
+        # adv_x = torch.clamp(adv_x, min_out, max_out)
 
-        r = r.detach()
-        g = g.detach()
-        b = b.detach()
-        x_d = x_d.detach()
+        # r = r.detach()
+        # g = g.detach()
+        # b = b.detach()
+        # x_d = x_d.detach()
         new_vec = new_vec.detach()
         cur_vec = cur_vec.detach()
 
         cosin_sim = cosin_metric(cur_vec, new_vec)
-
+        print(cosin_sim)
         # if count % 100 == 0:
         #     print("Iteration: ")
         #     print(count)
@@ -485,9 +542,14 @@ def attack(x, patch, mask, orig_rgb):
             # vutils.save_image(adv_x.data, str(count) + ".png", normalize=True)
 
 
-        if count >= opt.max_count:
-            break
-
+        # if count >= opt.max_count:
+        #     break
+        if(count%1000 == 0):
+            tmp = adv_x.clone()
+            vutils.save_image(tmp.data, "adv_"+str(count)+".png")
+    vutils.save_image(adv_x.data, "adv_final"+str(count)+".png")
+    print("lower than 0.3")
+    exit(0)
     # print("Total iteration: ")
     # print(count)
     # exit()
